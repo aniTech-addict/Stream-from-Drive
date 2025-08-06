@@ -55,6 +55,45 @@ def get_albums():
     return jsonify({"albums": items})
 
 
+@app.route('/api/albums/<album_id>/songs')
+def get_songs(album_id):
+    if 'credentials' not in session:
+        return jsonify({"error": "User not authenticated"}), 401
+    creds = Credentials(**session['credentials'])
+    drive_service = build('drive', 'v3', credentials=creds)
+
+    # List files (songs) inside the specific folder (album_id)
+    # We are looking for audio files. You can be more specific with mimeTypes
+    # e.g. "mimeType='audio/mpeg' or mimeType='audio/wav'"
+    q = f"'{album_id}' in parents and (mimeType contains 'audio/') "
+
+    results = drive_service.files().list(
+        q=q,
+        pageSize=100,  # Get up to 100 songs
+        fields="files(id, name)"
+    ).execute()
+    items = results.get('files', [])
+    return jsonify({"songs": items})
+
+
+@app.route('/api/stream/<song_id>')
+def stream_song(song_id):
+    if 'credentials' not in session:
+        return jsonify({"error": "User not authenticated"}), 401
+    creds = Credentials(**session['credentials'])
+    drive_service = build('drive', 'v3', credentials=creds)
+
+    request = drive_service.files().get_media(fileId=song_id)
+    
+    import io
+    from flask import Response
+    fh = io.BytesIO()
+    downloader = request
+    downloader.stream(fh)
+
+    return Response(fh.getvalue(), mimetype="audio/mpeg")
+    
+
 @app.route('/')
 def index():
     return "Backend is running!"
