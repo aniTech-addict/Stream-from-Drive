@@ -2,7 +2,7 @@
 
 import os
 import json
-from flask import Flask, redirect, url_for, session, request, jsonify
+from flask import Flask, redirect, url_for, session, request, jsonify, Response, stream_with_context
 from flask_cors import CORS
 from google_auth_oauthlib.flow import Flow
 from google.oauth2.credentials import Credentials
@@ -127,22 +127,44 @@ def get_songs(album_id):
     return jsonify({"songs": items})
 
 
+# Stream song
 @app.route('/api/stream/<song_id>')
 def stream_song(song_id):
+    """
+    Stream a song from Google Drive. This function is highly efficient and
+    streams the song in chunks, which allows it to work well with large files.
+
+    The song is streamed as an audio/mpeg response, which can be played directly
+    in a web browser.
+
+    :param song_id: The Google Drive ID of the song to stream
+    :return: A streaming Response object that can be played directly in a web
+             browser
+    """
     if 'credentials' not in session:
         return jsonify({"error": "User not authenticated"}), 401
+
     creds = Credentials(**session['credentials'])
     drive_service = build('drive', 'v3', credentials=creds)
 
-    request = drive_service.files().get_media(fileId=song_id)
-    
-    import io
-    from flask import Response
-    fh = io.BytesIO()
-    downloader = request
-    downloader.stream(fh)
+    # This creates a downloader object for the file
+    downloader = drive_service.files().get_media(fileId=song_id)
 
-    return Response(fh.getvalue(), mimetype="audio/mpeg")
+    # This is a generator function that will download the file in chunks
+    # and "yield" each chunk as it arrives.
+    def generate_chunks():
+        done = False
+        while not done:
+            # next_chunk() gets the next portion of the file
+            status, chunk = downloader.next_chunk()
+            if chunk:
+                yield chunk
+            # The 'status' object tells us when the download is complete
+            if status and status.resumable_progress >= status.total_size:
+                done = True
+
+    # We return a streaming Response, which is highly efficient.
+    return Response(stream_with_context(generate_chunks()), mimetype="audio/mpeg")
     
 
 @app.route('/')
@@ -226,7 +248,7 @@ def get_metadata():
 
 @app.route('/api/metadata', methods=['POST'])
 def update_metadata():
-    app.logger.info(f"Metadata update request received.")
+    app.logger.info("Metadata update request received.")
     app.logger.info(f"Request Headers: {request.headers}")
     app.logger.info(f"Request Data: {request.get_data(as_text=True)}")
 
